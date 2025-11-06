@@ -2137,6 +2137,7 @@ var testIfFeatureModules = []struct {
 
   grouping g {
 	container gc {}
+	container rf {}
   }
 }
 `,
