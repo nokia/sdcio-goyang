@@ -1598,20 +1598,20 @@ func (e *Entry) Find(name string) *Entry {
 			e = e.Parent
 		}
 		if prefix, _ := getPrefix(parts[0]); prefix != "" {
-			mod := FindModuleByPrefix(contextNode, prefix)
-			if mod == nil {
+			contextNode = FindModuleByPrefix(contextNode, prefix)
+			if contextNode == nil {
 				e.addError(fmt.Errorf("cannot find module giving prefix %q within context entry %q", prefix, e.Path()))
 				return nil
 			}
-			m := module(mod)
-			if m == nil {
-				e.addError(fmt.Errorf("cannot find which module %q belongs to within context entry %q",
-					mod.NName(), e.Path()))
-				return nil
-			}
-			if m != e.Node.(*Module) {
-				e = ToEntry(m)
-			}
+		}
+		m := module(contextNode)
+		if m == nil {
+			e.addError(fmt.Errorf("cannot find which module %q belongs to within context entry %q",
+				contextNode.NName(), e.Path()))
+			return nil
+		}
+		if m != e.Node.(*Module) {
+			e = ToEntry(m)
 		}
 	}
 

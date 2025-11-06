@@ -772,6 +772,102 @@ func TestAugmentedEntry(t *testing.T) {
 	}
 }
 
+var testAugmentFromSubModules = []struct {
+	name string
+	in   string
+}{
+	{
+		name: "original.yang",
+		in: `
+module original {
+  namespace "urn:original";
+  prefix "orig";
+
+  include orig_sub;
+
+  container sub {}
+}
+`,
+	},
+	{
+		name: "submod_augments.yang",
+		in: `
+submodule orig_sub {
+  belongs-to original { prefix orig; }
+  augment "/sub" {
+	leaf val { type string; }
+  }
+}`,
+	},
+}
+
+func TestAugmentedEntryWithoutPrefix(t *testing.T) {
+	ms := NewModules()
+	for _, tt := range testAugmentFromSubModules {
+		if err := ms.Parse(tt.in, tt.name); err != nil {
+			t.Fatalf("could not parse module %s: %v", tt.name, err)
+		}
+	}
+
+	if errs := ms.Process(); len(errs) > 0 {
+		t.Fatalf("could not process modules: %v", errs)
+	}
+
+	orig, _ := ms.GetModule("original")
+
+	testcases := []struct {
+		descr             string
+		augmentEntry      *Entry
+		augmentWhenStmt   string
+		augmentChildNames map[string]bool
+	}{
+		{
+			descr:        "leaf val is augmented to container sub by a non-prefixed lookup",
+			augmentEntry: orig.Dir["sub"].Augmented[0],
+			// augmentWhenStmt: "orig:omega = 'privetWorld'",
+			augmentChildNames: map[string]bool{
+				"val": false,
+			},
+		},
+	}
+
+	for _, tc := range testcases {
+		t.Run(tc.descr, func(t *testing.T) {
+			augment := tc.augmentEntry
+
+			if tc.augmentWhenStmt != "" {
+				if gotAugmentWhenStmt, ok := augment.GetWhenXPath(); !ok {
+					t.Errorf("Expected augment when statement %v, but not present",
+						tc.augmentWhenStmt)
+				} else if gotAugmentWhenStmt != tc.augmentWhenStmt {
+					t.Errorf("Expected augment when statement %v, but got %v",
+						tc.augmentWhenStmt, gotAugmentWhenStmt)
+				}
+			}
+
+			for name, entry := range augment.Dir {
+				if _, ok := tc.augmentChildNames[name]; ok {
+					tc.augmentChildNames[name] = true
+				} else {
+					t.Errorf("Got unexpected child name %v in augment", name)
+				}
+
+				if entry.Dir != nil {
+					t.Errorf("Expected augment's child entry %v have nil dir, but got %v",
+						name, entry.Dir)
+				}
+			}
+
+			for name, matched := range tc.augmentChildNames {
+				if !matched {
+					t.Errorf("Expected child name %v in augment, but not present", name)
+				}
+			}
+
+		})
+	}
+}
+
 func TestUsesEntry(t *testing.T) {
 	ms := NewModules()
 	ms.ParseOptions.StoreUses = true
