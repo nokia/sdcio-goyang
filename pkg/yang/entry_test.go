@@ -701,8 +701,30 @@ module augments {
       when "current()/orig:beta = 'nihaoWorld'";
     }
   }
+  augment "/orig:alpha/aug:echo" {
+	leaf echoLeaf2 { type string; }
+  }
 }
 `,
+	"augments2.yang": `
+module augments2 {
+  namespace "urn:augments2";
+  prefix "aug2";
+
+  import original {
+    prefix orig;
+  }
+
+  import augments{
+    prefix aug1;
+  }
+
+  augment "/orig:alpha/aug1:charlie" {
+	leaf foxtrott {
+		type string;
+	}
+  }
+}`,
 	"groupings.yang": `
 module groupings {
   namespace "urn:groupings";
@@ -763,6 +785,18 @@ func TestAugmentedEntry(t *testing.T) {
 			augmentChildNames: map[string]bool{
 				"echo": false,
 			},
+		}, {
+			descr:        "echoLeaf2 added in a separate augment to container alpha/echo",
+			augmentEntry: orig.Dir["alpha"].Dir["augments:echo"].Augmented[0],
+			augmentChildNames: map[string]bool{
+				"echoLeaf2": false,
+			},
+		}, {
+			descr:        "foxtrott augmented to container alpha/charlie",
+			augmentEntry: orig.Dir["alpha"].Dir["augments:charlie"].Augmented[0],
+			augmentChildNames: map[string]bool{
+				"foxtrott": false,
+			},
 		},
 	}
 
@@ -806,6 +840,7 @@ func TestAugmentedEntry(t *testing.T) {
 func TestUsesEntry(t *testing.T) {
 	ms := NewModules()
 	ms.ParseOptions.StoreUses = true
+	ms.ParseOptions.PrefixMergedKeyNames = true
 	for name, schema := range testAugmentAndUsesModules {
 		if err := ms.Parse(schema, name); err != nil {
 			t.Fatalf("could not parse module %s: %v", name, err)
@@ -2756,6 +2791,14 @@ func TestEntryFind(t *testing.T) {
 					prefix "bar"; // does not match import in test
 					namespace "urn:b";
 
+					import foo {
+						prefix f;
+					}
+
+					augment "/f:bar" {
+						leaf bac { type string; }
+					}
+
 					container fish {
 						leaf chips { type string; }
 					}
@@ -2769,6 +2812,8 @@ func TestEntryFind(t *testing.T) {
 			"../other":         "/test/other",
 			"/other":           "/test/other",
 			"/foo:bar/foo:baz": "/foo/bar/baz",
+			// changing prefixes
+			"/foo:bar/baz:bac": "/foo/bar/bac",
 			// Technically partially prefixed paths to remote modules are
 			// not legal - check whether we can resolve them.
 			"/foo:bar/baz": "/foo/bar/baz",
@@ -2784,6 +2829,7 @@ func TestEntryFind(t *testing.T) {
 
 	for _, tt := range tests {
 		ms := NewModules()
+		ms.ParseOptions.PrefixMergedKeyNames = true
 		var errs []error
 		for n, m := range tt.inModules {
 			if err := ms.Parse(m, n); err != nil {

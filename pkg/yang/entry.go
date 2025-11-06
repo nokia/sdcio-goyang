@@ -204,11 +204,11 @@ func (e *Entry) OptModules() *Modules {
 	for e.Parent != nil {
 		e = e.Parent
 	}
-	module, ok := e.Node.(*Module)
+	mod, ok := e.Node.(*Module)
 	if !ok {
 		return nil
 	}
-	return module.Modules
+	return mod.Modules
 }
 
 // IsDir returns true if e is a directory.
@@ -699,7 +699,12 @@ func ToEntry(n Node) (e *Entry) {
 			a := ToEntry(x)
 			a.Parent = e
 			a.Augments = append(a.Augments, e)
-			e.Find(a.Name).merge(nil, a.Namespace(), a)
+			nodeToAugment := e.Find(a.Name)
+			if nodeToAugment == nil {
+				return newError(s, "target node to augment %s not found in path: %s", a.Name, e.Path())
+			} else {
+				nodeToAugment.merge(nil, a.Namespace(), a)
+			}
 		}
 
 		for _, refine := range s.Refine {
@@ -1602,29 +1607,35 @@ func (e *Entry) Find(name string) *Entry {
 	}
 	parts := strings.Split(name, "/")
 
+	currentPrefix := ""
+	contextNode := RootNode(e.Node)
+	lastModule := contextNode
+
 	// If parts[0] is "" then this path started with a /
 	// and we need to find our parent.
 	if parts[0] == "" {
 		parts = parts[1:]
-		contextNode := e.Node
 		for e.Parent != nil {
 			e = e.Parent
 		}
+		rootNode := contextNode
 		if prefix, _ := getPrefix(parts[0]); prefix != "" {
-			contextNode = FindModuleByPrefix(contextNode, prefix)
-			if contextNode == nil {
+			currentPrefix = prefix
+			rootNode = FindModuleByPrefix(contextNode, prefix)
+			if rootNode == nil {
 				e.addError(fmt.Errorf("cannot find module giving prefix %q within context entry %q", prefix, e.Path()))
 				return nil
 			}
 		}
-		m := module(contextNode)
+		m := module(rootNode)
 		if m == nil {
 			e.addError(fmt.Errorf("cannot find which module %q belongs to within context entry %q",
-				contextNode.NName(), e.Path()))
+				rootNode.NName(), e.Path()))
 			return nil
 		}
 		if m != e.Node.(*Module) {
 			e = ToEntry(m)
+			lastModule = m
 		}
 	}
 
@@ -1658,13 +1669,22 @@ func (e *Entry) Find(name string) *Entry {
 				e = e.RPC.Output
 			}
 		default:
-			_, part = getPrefix(part)
-			switch part {
+			prefix, partName := getPrefix(part)
+			prefixedName := partName
+			if prefix != "" && prefix != currentPrefix {
+				module := FindModuleByPrefix(contextNode, prefix)
+				if module != nil && module.Name != lastModule.Name {
+					prefixedName = module.Name + ":" + partName
+					lastModule = module
+				}
+				currentPrefix = prefix
+			}
+			switch partName {
 			case ".":
 			case "", "..":
 				return nil
 			default:
-				e = e.Dir[part]
+				e = e.Dir[prefixedName]
 			}
 		}
 	}
@@ -1785,7 +1805,7 @@ func (e *Entry) dup() *Entry {
 
 // merge merges a duplicate of oe.Dir into e.Dir, setting the prefix of each
 // element to prefix, if not nil.  It is an error if e and oe contain common
-// elements.
+// elements in the same namespace.
 func (e *Entry) merge(prefix *Value, namespace *Value, oe *Entry) {
 	e.importErrors(oe)
 	entryNameSpace := e.Namespace()
@@ -1796,7 +1816,7 @@ func (e *Entry) merge(prefix *Value, namespace *Value, oe *Entry) {
 		}
 		if namespace != nil {
 			v.namespace = namespace
-			if entryNameSpace.Name != namespace.Name {
+			if entryNameSpace.Name != namespace.Name && namespace.Name != "" {
 				modules := oe.OptModules()
 				if modules == nil {
 					modules = e.OptModules()
@@ -1805,6 +1825,8 @@ func (e *Entry) merge(prefix *Value, namespace *Value, oe *Entry) {
 					module, err := modules.FindModuleByNamespace(namespace.Name)
 					if err == nil {
 						k = fmt.Sprintf("%s:%s", module.Name, k)
+					} else {
+						e.addError(fmt.Errorf("%s: could not find module for namespace %q when merging key %q", Source(oe.Node), namespace.Name, k))
 					}
 				}
 			}
