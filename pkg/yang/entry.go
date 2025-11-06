@@ -730,8 +730,8 @@ func ToEntry(n Node) (e *Entry) {
 
 			//
 			//   o  Any node may get a different "config" statement.
-			if refine.Reference != nil {
-				refineTarget.Config, err = tristateValue(refine.Reference)
+			if refine.Config != nil {
+				refineTarget.Config, err = tristateValue(refine.Config)
 				if err != nil {
 					return newError(n, "error determining TriState value of Config: %s", err)
 				}
