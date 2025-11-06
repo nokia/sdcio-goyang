@@ -27,6 +27,11 @@ type Options struct {
 	// generated within the schema to store the logical grouping from which it
 	// is derived.
 	StoreUses bool
+	// PrefixMergedKeyNames adds the augmenting module's name as a prefix to
+	// any key names that are added via an augment statement
+	// (if the augment is from a different namespace). This ensures that
+	// there are no collisions between key names that are added from different modules.
+	PrefixMergedKeyNames bool
 	// DeviateOptions contains options for how deviations are handled.
 	DeviateOptions DeviateOptions
 }

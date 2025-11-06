@@ -199,6 +199,18 @@ func (e *Entry) Modules() *Modules {
 	return e.Node.(*Module).Modules
 }
 
+// OptModules returns the Modules structure that e is part of, if it exists.
+func (e *Entry) OptModules() *Modules {
+	for e.Parent != nil {
+		e = e.Parent
+	}
+	module, ok := e.Node.(*Module)
+	if !ok {
+		return nil
+	}
+	return module.Modules
+}
+
 // IsDir returns true if e is a directory.
 func (e *Entry) IsDir() bool {
 	return e.Dir != nil
@@ -1776,6 +1788,7 @@ func (e *Entry) dup() *Entry {
 // elements.
 func (e *Entry) merge(prefix *Value, namespace *Value, oe *Entry) {
 	e.importErrors(oe)
+	entryNameSpace := e.Namespace()
 	for k, v := range oe.Dir {
 		v := v.dup()
 		if prefix != nil {
@@ -1783,6 +1796,18 @@ func (e *Entry) merge(prefix *Value, namespace *Value, oe *Entry) {
 		}
 		if namespace != nil {
 			v.namespace = namespace
+			if entryNameSpace.Name != namespace.Name {
+				modules := oe.OptModules()
+				if modules == nil {
+					modules = e.OptModules()
+				}
+				if modules != nil && modules.ParseOptions.PrefixMergedKeyNames {
+					module, err := modules.FindModuleByNamespace(namespace.Name)
+					if err == nil {
+						k = fmt.Sprintf("%s:%s", module.Name, k)
+					}
+				}
+			}
 		}
 		if se := e.Dir[k]; se != nil {
 			er := newError(oe.Node, `Duplicate node %q in %q from:

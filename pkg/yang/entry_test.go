@@ -31,6 +31,34 @@ import (
 	"github.com/openconfig/gnmi/errdiff"
 )
 
+func loadTestModules(t *testing.T, schemas map[string]string) *Modules {
+	modules, _ := loadTestModulesExt(t, schemas, false)
+	return modules
+}
+
+func loadTestModulesExt(t *testing.T, schemas map[string]string, expectErrors bool, fmtArgs ...any) (*Modules, []error) {
+	ms := NewModules()
+	ms.ParseOptions.StoreUses = true
+	ms.ParseOptions.PrefixMergedKeyNames = true
+	for name, schema := range schemas {
+		if len(fmtArgs) > 0 {
+			schema = fmt.Sprintf(schema, fmtArgs...)
+		}
+		if err := ms.Parse(schema, name); err != nil {
+			if expectErrors {
+				return ms, []error{err}
+			}
+			t.Fatalf("could not parse module %s: %v", name, err)
+		}
+	}
+
+	errs := ms.Process()
+	if !expectErrors && len(errs) > 0 {
+		t.Fatalf("could not process modules: %v", errs)
+	}
+	return ms, errs
+}
+
 func TestNilEntry(t *testing.T) {
 	e := ToEntry(nil)
 	_, ok := e.Node.(*ErrorNode)
@@ -253,6 +281,7 @@ module baz {
   augment /f:foo-c {
     uses baz-common;
     leaf baz-direct-leaf { type string; }
+	leaf zzz { type string; }
   }
 }
 `,
@@ -293,11 +322,15 @@ module baz {
 
 func TestUsesParent(t *testing.T) {
 	ms := NewModules()
+	ms.ParseOptions.PrefixMergedKeyNames = true
 	for _, tt := range parentTestModules {
 		_ = ms.Parse(tt.in, tt.name)
 	}
 
-	efoo, _ := ms.GetModule("foo")
+	efoo, errs := ms.GetModule("foo")
+	if len(errs) != 0 {
+		t.Fatalf("unexpected errors for foo: %v", errs)
+	}
 	used := efoo.Dir["foo-c"].Dir["test1"]
 	expected := "/foo/foo-c/test1"
 	if used.Path() != expected {
@@ -311,8 +344,21 @@ func TestUsesParent(t *testing.T) {
 	}
 }
 
+func TestPrefixesDisabled(t *testing.T) {
+	ms := NewModules()
+	ms.ParseOptions.PrefixMergedKeyNames = false
+	for _, tt := range parentTestModules {
+		_ = ms.Parse(tt.in, tt.name)
+	}
+	_, errs := ms.GetModule("foo")
+	if len(errs) == 0 {
+		t.Fatalf("expected errors for duplicate entries")
+	}
+}
+
 func TestPrefixes(t *testing.T) {
 	ms := NewModules()
+	ms.ParseOptions.PrefixMergedKeyNames = true
 	for _, tt := range parentTestModules {
 		_ = ms.Parse(tt.in, tt.name)
 	}
@@ -345,6 +391,7 @@ func TestPrefixes(t *testing.T) {
 
 func TestEntryNamespace(t *testing.T) {
 	ms := NewModules()
+	ms.ParseOptions.PrefixMergedKeyNames = true
 	for _, tt := range parentTestModules {
 		if err := ms.Parse(tt.in, tt.name); err != nil {
 			t.Fatalf("could not parse module %s: %v", tt.name, err)
@@ -378,6 +425,12 @@ func TestEntryNamespace(t *testing.T) {
 			wantMod: "foo",
 		},
 		{
+			descr:   "grouping defined and used in foo has foo's namespace",
+			entry:   foo.Dir["foo-c"].Dir["baz:zzz"],
+			ns:      "urn:baz",
+			wantMod: "baz",
+		},
+		{
 			descr:   "grouping defined and used in bar has bar's namespace",
 			entry:   bar.Dir["bar-local"].Dir["test1"],
 			ns:      "urn:bar",
@@ -385,19 +438,19 @@ func TestEntryNamespace(t *testing.T) {
 		},
 		{
 			descr:   "leaf within a used grouping in baz augmented into foo has baz's namespace",
-			entry:   foo.Dir["foo-c"].Dir["baz-common-leaf"],
+			entry:   foo.Dir["foo-c"].Dir["baz:baz-common-leaf"],
 			ns:      "urn:baz",
 			wantMod: "baz",
 		},
 		{
 			descr:   "leaf directly defined within an augment to foo from baz has baz's namespace",
-			entry:   foo.Dir["foo-c"].Dir["baz-direct-leaf"],
+			entry:   foo.Dir["foo-c"].Dir["baz:baz-direct-leaf"],
 			ns:      "urn:baz",
 			wantMod: "baz",
 		},
 		{
 			descr:   "leaf directly defined within an augment to foo from submodule baz-augment of baz has baz's namespace",
-			entry:   foo.Dir["foo-c"].Dir["baz-submod-leaf"],
+			entry:   foo.Dir["foo-c"].Dir["baz:baz-submod-leaf"],
 			ns:      "urn:baz",
 			wantMod: "baz",
 		},
@@ -408,8 +461,8 @@ func TestEntryNamespace(t *testing.T) {
 			wantModError: `could not find module "" when retrieving namespace for qux-submod-leaf: "": no such namespace`,
 		},
 		{
-			descr:   "children of a container within an augment to from baz have baz's namespace",
-			entry:   foo.Dir["foo-c"].Dir["baz-dir"].Dir["aardvark"],
+			descr:   "children of a container within an augment to foo from baz have baz's namespace",
+			entry:   foo.Dir["foo-c"].Dir["baz:baz-dir"].Dir["aardvark"],
 			ns:      "urn:baz",
 			wantMod: "baz",
 		},
@@ -585,13 +638,8 @@ func TestGetWhenXPath(t *testing.T) {
 	}
 }
 
-var testAugmentAndUsesModules = []struct {
-	name string
-	in   string
-}{
-	{
-		name: "original.yang",
-		in: `
+var testAugmentAndUsesModules = map[string]string{
+	"original.yang": `
 module original {
   namespace "urn:original";
   prefix "orig";
@@ -616,10 +664,7 @@ module original {
   }
 }
 `,
-	},
-	{
-		name: "augments.yang",
-		in: `
+	"augments.yang": `
 module augments {
   namespace "urn:augments";
   prefix "aug";
@@ -658,10 +703,7 @@ module augments {
   }
 }
 `,
-	},
-	{
-		name: "groupings.yang",
-		in: `
+	"groupings.yang": `
 module groupings {
   namespace "urn:groupings";
   prefix "grp";
@@ -695,21 +737,10 @@ module groupings {
   }
 }
 `,
-	},
 }
 
 func TestAugmentedEntry(t *testing.T) {
-	ms := NewModules()
-	for _, tt := range testAugmentAndUsesModules {
-		if err := ms.Parse(tt.in, tt.name); err != nil {
-			t.Fatalf("could not parse module %s: %v", tt.name, err)
-		}
-	}
-
-	if errs := ms.Process(); len(errs) > 0 {
-		t.Fatalf("could not process modules: %v", errs)
-	}
-
+	ms := loadTestModules(t, testAugmentAndUsesModules)
 	orig, _ := ms.GetModule("original")
 
 	testcases := []struct {
@@ -772,108 +803,12 @@ func TestAugmentedEntry(t *testing.T) {
 	}
 }
 
-var testAugmentFromSubModules = []struct {
-	name string
-	in   string
-}{
-	{
-		name: "original.yang",
-		in: `
-module original {
-  namespace "urn:original";
-  prefix "orig";
-
-  include orig_sub;
-
-  container sub {}
-}
-`,
-	},
-	{
-		name: "submod_augments.yang",
-		in: `
-submodule orig_sub {
-  belongs-to original { prefix orig; }
-  augment "/sub" {
-	leaf val { type string; }
-  }
-}`,
-	},
-}
-
-func TestAugmentedEntryWithoutPrefix(t *testing.T) {
-	ms := NewModules()
-	for _, tt := range testAugmentFromSubModules {
-		if err := ms.Parse(tt.in, tt.name); err != nil {
-			t.Fatalf("could not parse module %s: %v", tt.name, err)
-		}
-	}
-
-	if errs := ms.Process(); len(errs) > 0 {
-		t.Fatalf("could not process modules: %v", errs)
-	}
-
-	orig, _ := ms.GetModule("original")
-
-	testcases := []struct {
-		descr             string
-		augmentEntry      *Entry
-		augmentWhenStmt   string
-		augmentChildNames map[string]bool
-	}{
-		{
-			descr:        "leaf val is augmented to container sub by a non-prefixed lookup",
-			augmentEntry: orig.Dir["sub"].Augmented[0],
-			// augmentWhenStmt: "orig:omega = 'privetWorld'",
-			augmentChildNames: map[string]bool{
-				"val": false,
-			},
-		},
-	}
-
-	for _, tc := range testcases {
-		t.Run(tc.descr, func(t *testing.T) {
-			augment := tc.augmentEntry
-
-			if tc.augmentWhenStmt != "" {
-				if gotAugmentWhenStmt, ok := augment.GetWhenXPath(); !ok {
-					t.Errorf("Expected augment when statement %v, but not present",
-						tc.augmentWhenStmt)
-				} else if gotAugmentWhenStmt != tc.augmentWhenStmt {
-					t.Errorf("Expected augment when statement %v, but got %v",
-						tc.augmentWhenStmt, gotAugmentWhenStmt)
-				}
-			}
-
-			for name, entry := range augment.Dir {
-				if _, ok := tc.augmentChildNames[name]; ok {
-					tc.augmentChildNames[name] = true
-				} else {
-					t.Errorf("Got unexpected child name %v in augment", name)
-				}
-
-				if entry.Dir != nil {
-					t.Errorf("Expected augment's child entry %v have nil dir, but got %v",
-						name, entry.Dir)
-				}
-			}
-
-			for name, matched := range tc.augmentChildNames {
-				if !matched {
-					t.Errorf("Expected child name %v in augment, but not present", name)
-				}
-			}
-
-		})
-	}
-}
-
 func TestUsesEntry(t *testing.T) {
 	ms := NewModules()
 	ms.ParseOptions.StoreUses = true
-	for _, tt := range testAugmentAndUsesModules {
-		if err := ms.Parse(tt.in, tt.name); err != nil {
-			t.Fatalf("could not parse module %s: %v", tt.name, err)
+	for name, schema := range testAugmentAndUsesModules {
+		if err := ms.Parse(schema, name); err != nil {
+			t.Fatalf("could not parse module %s: %v", name, err)
 		}
 	}
 
@@ -957,6 +892,156 @@ func TestUsesEntry(t *testing.T) {
 					}
 				}
 				usesParentEntry = grouping
+			}
+
+		})
+	}
+}
+
+var testAugmentFromSubModules = map[string]string{
+	"original.yang": `
+module original {
+  namespace "urn:original";
+  prefix "orig";
+
+  include orig_sub;
+
+  container sub {}
+}
+`,
+	"submod_augments.yang": `
+submodule orig_sub {
+  belongs-to original { prefix orig; }
+  augment "/sub" {
+	leaf val { type string; }
+  }
+}
+`,
+}
+
+func TestAugmentedEntryWithoutPrefix(t *testing.T) {
+	ms := loadTestModules(t, testAugmentFromSubModules)
+
+	orig, _ := ms.GetModule("original")
+
+	testcases := []struct {
+		descr             string
+		augmentEntry      *Entry
+		augmentChildNames map[string]bool
+	}{
+		{
+			descr:        "leaf val is augmented to container sub by a non-prefixed lookup",
+			augmentEntry: orig.Dir["sub"].Augmented[0],
+			augmentChildNames: map[string]bool{
+				"val": false,
+			},
+		},
+	}
+
+	for _, tc := range testcases {
+		t.Run(tc.descr, func(t *testing.T) {
+			augment := tc.augmentEntry
+
+			for name, entry := range augment.Dir {
+				if _, ok := tc.augmentChildNames[name]; ok {
+					tc.augmentChildNames[name] = true
+				} else {
+					t.Errorf("Got unexpected child name %v in augment", name)
+				}
+
+				if entry.Dir != nil {
+					t.Errorf("Expected augment's child entry %v have nil dir, but got %v",
+						name, entry.Dir)
+				}
+			}
+
+			for name, matched := range tc.augmentChildNames {
+				if !matched {
+					t.Errorf("Expected child name %v in augment, but not present", name)
+				}
+			}
+
+		})
+	}
+}
+
+func TestAugmentedEntryWithDuplicateName(t *testing.T) {
+	ms := loadTestModules(t, map[string]string{
+		"original.yang": `
+		module original {
+			namespace "urn:original";
+			prefix "orig";
+  			container aug {
+				leaf a {
+					type string;
+				}
+			}
+			container aug2 {
+				leaf a {
+					type string;
+				}
+			}
+			grouping grp-1 {
+				leaf a {
+					type string;
+				}
+			}
+		}`,
+		"augment.yang": `
+		module augments {
+			namespace "urn:aug";
+			prefix "aug";
+			import "original" {
+				prefix "orig";
+			}
+			augment "/orig:aug" {
+				leaf a {
+					type string;
+				}
+			}
+			augment "/orig:aug2" {
+				uses orig:grp-1;
+			}
+		}`,
+	})
+
+	orig, _ := ms.GetModule("original")
+
+	testcases := []struct {
+		descr             string
+		augmentEntry      *Entry
+		augmentChildNames map[string]bool
+	}{
+		{
+			descr:        "leaf augments:a is augmented to container aug",
+			augmentEntry: orig.Dir["aug"].Augmented[0],
+			augmentChildNames: map[string]bool{
+				"a": false,
+			},
+		},
+	}
+
+	for _, tc := range testcases {
+		t.Run(tc.descr, func(t *testing.T) {
+			augment := tc.augmentEntry
+
+			for name, entry := range augment.Dir {
+				if _, ok := tc.augmentChildNames[name]; ok {
+					tc.augmentChildNames[name] = true
+				} else {
+					t.Errorf("Got unexpected child name %v in augment", name)
+				}
+
+				if entry.Dir != nil {
+					t.Errorf("Expected augment's child entry %v have nil dir, but got %v",
+						name, entry.Dir)
+				}
+			}
+
+			for name, matched := range tc.augmentChildNames {
+				if !matched {
+					t.Errorf("Expected child name %v in augment, but not present", name)
+				}
 			}
 
 		})
@@ -4323,27 +4408,30 @@ func TestAugmentUses(t *testing.T) {
 			for _, e := range errs {
 				errsStr.WriteString(e.Error())
 			}
-
+			wantErrors := len(tt.WantErrors) > 0
 			for _, errStr := range tt.WantErrors {
-				strings.Contains(errsStr.String(), errStr)
-			}
-
-			var curElem *Entry
-			curElem, errs = ms.GetModule("mod-a")
-			if len(errs) > 0 {
-				t.Fatalf("GetModule returned errors: %v", errs)
-			}
-
-			x := curElem
-			for _, p := range tt.pathExist {
-				for _, pe := range p {
-					y, ok := x.Dir[pe]
-					if !ok {
-						t.Fatalf("expected module %s to contain path %s, could not find element %s in parent, got children: %v", curElem.Name, strings.Join(p, "/"), pe, x.Dir)
-					}
-					x = y
+				if !strings.Contains(errsStr.String(), errStr) {
+					t.Fatalf("errors [%s] didn't contain expected error %s", errsStr.String(), errStr)
 				}
-				x = curElem
+			}
+			if !wantErrors {
+				var curElem *Entry
+				curElem, errs = ms.GetModule("mod-a")
+				if len(errs) > 0 {
+					t.Fatalf("GetModule returned errors: %v", errs)
+				}
+
+				x := curElem
+				for _, p := range tt.pathExist {
+					for _, pe := range p {
+						y, ok := x.Dir[pe]
+						if !ok {
+							t.Fatalf("expected module %s to contain path %s, could not find element %s in parent, got children: %v", curElem.Name, strings.Join(p, "/"), pe, x.Dir)
+						}
+						x = y
+					}
+					x = curElem
+				}
 			}
 		})
 	}
