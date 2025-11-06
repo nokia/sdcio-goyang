@@ -630,10 +630,11 @@ func ToEntry(n Node) (e *Entry) {
 		// Create the equivalent leaf element that we are a list of.
 		// We can then just annotate it as a list rather than a leaf.
 		leaf := &Leaf{
-			Name:        s.Name,
-			Source:      s.Source,
-			Parent:      s.Parent,
-			Extensions:  s.Extensions,
+			Name:   s.Name,
+			Source: s.Source,
+			Parent: s.Parent,
+			// don't copy extensions, they will be added by the defer above
+			// Extensions:  s.Extensions,
 			Config:      s.Config,
 			Description: s.Description,
 			IfFeature:   s.IfFeature,

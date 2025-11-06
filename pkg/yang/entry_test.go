@@ -1669,6 +1669,10 @@ func TestFullModuleProcess(t *testing.T) {
 						ext:s-define "s's extension";
 						type string;
 					}
+					leaf-list ss {
+						ext:s-define "ss's extension";
+						type string;
+					}
 
 				}
 			}
@@ -1748,6 +1752,15 @@ func TestFullModuleProcess(t *testing.T) {
 				{Keyword: "ext:u-define", HasArgument: true, Argument: "uses's extension"},
 			}, module.Dir["c"].Dir["s"].Exts, cmpopts.IgnoreUnexported(Statement{}), less); diff != "" {
 				t.Errorf("leaf s Exts (-want, +got):\n%s", diff)
+			}
+
+			if diff := cmp.Diff([]*Statement{
+				{Keyword: "ext:g-define", HasArgument: true, Argument: "daughter-group's extension"},
+				{Keyword: "ext:sg-define", HasArgument: true, Argument: "son-group's extension"},
+				{Keyword: "ext:s-define", HasArgument: true, Argument: "ss's extension"},
+				{Keyword: "ext:u-define", HasArgument: true, Argument: "uses's extension"},
+			}, module.Dir["c"].Dir["ss"].Exts, cmpopts.IgnoreUnexported(Statement{}), less); diff != "" {
+				t.Errorf("leaf-list ss Exts (-want, +got):\n%s", diff)
 			}
 
 			if diff := cmp.Diff([]*Statement{
