@@ -71,6 +71,45 @@ type deviationPresence struct {
 	hasMaxElements bool
 }
 
+type NotImplementedError struct {
+	ErrMessage   string
+	WrappedError error
+}
+
+func (e *NotImplementedError) Error() string {
+	if e.WrappedError != nil {
+		return e.ErrMessage + ": " + e.WrappedError.Error()
+	}
+	return e.ErrMessage
+}
+
+func (e *NotImplementedError) Unwrap() error {
+	return e.WrappedError
+}
+
+func NewNotImplementedError(msg string, err error) *NotImplementedError {
+	return &NotImplementedError{
+		ErrMessage:   msg,
+		WrappedError: err,
+	}
+}
+
+type PathPointsToExtensionError struct {
+	Path string
+	Src  string
+}
+
+func (e *PathPointsToExtensionError) Error() string {
+	return fmt.Sprintf("%s: path points to an extension: %s", e.Src, e.Path)
+}
+
+func NewPathPointsToExtensionError(path, src string) *PathPointsToExtensionError {
+	return &PathPointsToExtensionError{
+		Path: path,
+		Src:  src,
+	}
+}
+
 // Entry represents a single schema tree node, which can be a directory
 // (containing a subtree) or a leaf node (which contains YANG types that have
 // no children, e.g., leaf, leaf-list). They can be distinguished by whether
@@ -1369,10 +1408,15 @@ func (e *Entry) Augment(addErrors bool) (processed, skipped int) {
 	// progress)
 	var unapplied []*Entry
 	for _, a := range e.Augments {
-		target := a.Find(a.Name)
-		if target == nil {
+		target, err := a.FindOrError(a.Name)
+		if err != nil {
 			if addErrors {
-				e.errorf("%s: augment %s not found", Source(a.Node), a.Name)
+				var pathPointsToExtensionError *PathPointsToExtensionError
+				if errors.As(err, &pathPointsToExtensionError) {
+					e.addError(NewNotImplementedError("augmenting extensions is not supported", err))
+				} else {
+					e.errorf("%s: augment %s not found", Source(a.Node), a.Name)
+				}
 			}
 			skipped++
 			unapplied = append(unapplied, a)
@@ -1602,71 +1646,81 @@ func (e *Entry) ReadOnly() bool {
 
 // Find finds the Entry named by name relative to e.
 func (e *Entry) Find(name string) *Entry {
-	if e == nil || name == "" {
+	res, err := e.FindOrError(name)
+	if err != nil {
+		if e != nil {
+			e.addError(err)
+		}
 		return nil
+	}
+	return res
+}
+
+// FindOrError finds the Entry named by name relative to e or return an error.
+func (e *Entry) FindOrError(name string) (*Entry, error) {
+	if e == nil || name == "" {
+		return nil, errors.New("invalid input for Find")
 	}
 	parts := strings.Split(name, "/")
 
 	currentPrefix := ""
 	contextNode := RootNode(e.Node)
 	lastModule := contextNode
+	curr := e
 
 	// If parts[0] is "" then this path started with a /
 	// and we need to find our parent.
 	if parts[0] == "" {
 		parts = parts[1:]
-		for e.Parent != nil {
-			e = e.Parent
+		for curr.Parent != nil {
+			curr = curr.Parent
 		}
 		rootNode := contextNode
 		if prefix, _ := getPrefix(parts[0]); prefix != "" {
 			currentPrefix = prefix
 			rootNode = FindModuleByPrefix(contextNode, prefix)
 			if rootNode == nil {
-				e.addError(fmt.Errorf("cannot find module giving prefix %q within context entry %q", prefix, e.Path()))
-				return nil
+				return nil, fmt.Errorf("cannot find module giving prefix %q within context entry %q", prefix, e.Path())
 			}
 		}
 		m := module(rootNode)
 		if m == nil {
-			e.addError(fmt.Errorf("cannot find which module %q belongs to within context entry %q",
-				rootNode.NName(), e.Path()))
-			return nil
+			return nil, fmt.Errorf("cannot find which module %q belongs to within context entry %q", rootNode.NName(), e.Path())
 		}
-		if m != e.Node.(*Module) {
-			e = ToEntry(m)
+		if m != curr.Node.(*Module) {
+			curr = ToEntry(m)
 			lastModule = m
 		}
 	}
 
 	for _, part := range parts {
 		switch {
-		case e == nil:
-			return nil
+		case curr == nil:
+			return nil, e.pathNotFound(name)
 		case part == ".":
 		case part == "..":
-			e = e.Parent
-		case e.RPC != nil:
+			curr = curr.Parent
+		case curr.RPC != nil:
 			_, part = getPrefix(part)
 			switch part {
 			case "input":
-				if e.RPC.Input == nil {
-					e.RPC.Input = &Entry{
+				if curr.RPC.Input == nil {
+					curr.RPC.Input = &Entry{
 						Name: "input",
 						Kind: InputEntry,
 						Dir:  make(map[string]*Entry),
 					}
 				}
-				e = e.RPC.Input
+				curr = curr.RPC.Input
 			case "output":
-				if e.RPC.Output == nil {
-					e.RPC.Output = &Entry{
+				if curr.RPC.Output == nil {
+					curr.RPC.Output = &Entry{
 						Name: "output",
 						Kind: OutputEntry,
 						Dir:  make(map[string]*Entry),
 					}
 				}
-				e = e.RPC.Output
+				curr = curr.RPC.Output
 			}
 		default:
 			prefix, partName := getPrefix(part)
@@ -1682,13 +1736,28 @@ func (e *Entry) Find(name string) *Entry {
 			switch partName {
 			case ".":
 			case "", "..":
-				return nil
+				return nil, fmt.Errorf("invalid prefixed sequence in %s", name)
 			default:
-				e = e.Dir[prefixedName]
+				child := curr.Dir[prefixedName]
+				if child == nil {
+					for _, ext := range curr.Exts {
+						if ext.Argument == partName {
+							return nil, NewPathPointsToExtensionError(name, Source(e.Node))
+						}
+					}
+				}
+				curr = child
 			}
 		}
 	}
-	return e
+	if curr == nil {
+		return nil, e.pathNotFound(name)
+	}
+	return curr, nil
+}
+
+func (e *Entry) pathNotFound(name string) error {
+	return fmt.Errorf("path %s not found at %s", name, Source(e.Node))
 }
 
 // Path returns the path to e. A nil Entry returns "".

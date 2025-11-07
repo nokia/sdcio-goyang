@@ -302,6 +302,15 @@ module baz {
 		}
 		`,
 	},
+	//{
+	//	name: "qux.yang",
+	//	in: `
+	//	module qux {
+	//		namespace "urn:qux";
+	//		prefix "qux";
+	//    }
+	//	`,
+	//},
 	{
 		name: "qux-augment.yang",
 		in: `
@@ -324,7 +333,10 @@ func TestUsesParent(t *testing.T) {
 	ms := NewModules()
 	ms.ParseOptions.PrefixMergedKeyNames = true
 	for _, tt := range parentTestModules {
-		_ = ms.Parse(tt.in, tt.name)
+		err := ms.Parse(tt.in, tt.name)
+		if err != nil {
+			t.Fatalf("could not parse module %s: %v", tt.name, err)
+		}
 	}
 
 	efoo, errs := ms.GetModule("foo")
@@ -1080,6 +1092,55 @@ func TestAugmentedEntryWithDuplicateName(t *testing.T) {
 			}
 
 		})
+	}
+}
+
+func TestAugmentPathPointsToExtension(t *testing.T) {
+	_, errs := loadTestModulesExt(t, map[string]string{
+		"original.yang": `
+		module original {
+			namespace "urn:original";
+			prefix "orig";
+
+  			extension ext1 {
+				argument name;
+			}
+
+			orig:ext1 root {}
+
+			container c {
+				orig:ext1 embedded {}
+			}
+			container d {
+				leaf embedded { type string; }
+			}
+		}`,
+		"augment.yang": `
+		module augments {
+			namespace "urn:aug";
+			prefix "aug";
+			import "original" {
+				prefix "orig";
+			}
+			augment "/orig:d" {
+				orig:ext1 augmented;
+			}
+			augment "/orig:root" {
+			}
+			augment "/orig:c/orig:embedded" {
+			}
+			augment "/orig:c/aug:embedded" {
+			}
+		}`,
+	}, true)
+
+	if len(errs) != 3 {
+		t.Errorf("expected 3 processing errors, instead got %d", len(errs))
+	}
+	for _, err := range errs {
+		if _, ok := err.(*NotImplementedError); !ok {
+			t.Errorf("expected all errors to be of type 'NotImplemented', but got error %s", err.Error())
+		}
 	}
 }
 
