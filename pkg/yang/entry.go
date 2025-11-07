@@ -1877,7 +1877,7 @@ func (e *Entry) dup() *Entry {
 // elements in the same namespace.
 func (e *Entry) merge(prefix *Value, namespace *Value, oe *Entry) {
 	e.importErrors(oe)
-	entryNameSpace := e.Namespace()
+	modulePrefix := e.getModulePrefix(namespace, oe)
 	for k, v := range oe.Dir {
 		v := v.dup()
 		if prefix != nil {
@@ -1885,21 +1885,8 @@ func (e *Entry) merge(prefix *Value, namespace *Value, oe *Entry) {
 		}
 		if namespace != nil {
 			v.namespace = namespace
-			if entryNameSpace.Name != namespace.Name && namespace.Name != "" {
-				modules := oe.OptModules()
-				if modules == nil {
-					modules = e.OptModules()
-				}
-				if modules != nil && modules.ParseOptions.PrefixMergedKeyNames {
-					module, err := modules.FindModuleByNamespace(namespace.Name)
-					if err == nil {
-						k = fmt.Sprintf("%s:%s", module.Name, k)
-					} else {
-						e.addError(fmt.Errorf("%s: could not find module for namespace %q when merging key %q", Source(oe.Node), namespace.Name, k))
-					}
-				}
-			}
 		}
+		k = modulePrefix + k
 		if se := e.Dir[k]; se != nil {
 			er := newError(oe.Node, `Duplicate node %q in %q from:
    %s: %s
@@ -1914,6 +1901,24 @@ func (e *Entry) merge(prefix *Value, namespace *Value, oe *Entry) {
 			e.Dir[k] = v
 		}
 	}
+}
+
+func (e *Entry) getModulePrefix(namespace *Value, oe *Entry) string {
+	if namespace != nil && namespace.Name != "" {
+		entryNamespaceName := e.Namespace().Name
+		if namespace.Name != entryNamespaceName {
+			modules := e.OptModules()
+			if modules != nil && modules.ParseOptions.PrefixMergedKeyNames {
+				module, err := modules.FindModuleByNamespace(namespace.Name)
+				if err == nil {
+					return module.Name + ":"
+				} else {
+					e.addError(fmt.Errorf("%s: could not find module for namespace %q when merging %q", Source(oe.Node), namespace.Name, Source(oe.Node)))
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // nless returns -1 if a is less than b, 0 if a == b, and 1 if a > b.
