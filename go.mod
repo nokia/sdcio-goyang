@@ -1,4 +1,4 @@
-module github.com/openconfig/goyang
+module github.com/nokia/sdcio-goyang
 
 go 1.22.0
 

@@ -20,8 +20,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/openconfig/goyang/pkg/indent"
-	"github.com/openconfig/goyang/pkg/yang"
+	"github.com/nokia/sdcio-goyang/pkg/indent"
+	"github.com/nokia/sdcio-goyang/pkg/yang"
 )
 
 func init() {
