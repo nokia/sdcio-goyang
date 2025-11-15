@@ -717,6 +717,9 @@ func ToEntry(n Node) (e *Entry) {
 		e.Prefix = getRootPrefix(e)
 		return e
 	case *Uses:
+		// if s.Name == "rt:next-hop-content" {
+		// 	println("debug here")
+		// }
 		g := FindGrouping(s, s.Name, map[string]bool{})
 		if g == nil {
 			return newError(n, "unknown group: %s", s.Name)
@@ -736,13 +739,20 @@ func ToEntry(n Node) (e *Entry) {
 		// process augments
 		for _, x := range s.Augment {
 			a := ToEntry(x)
-			a.Parent = e
+			// this use of augment is different from normal augment
+			// processing as we are applying the augment to
+			// the grouping entry, not to the tree itself.
+			// a.Parent = e // incorrect parent: this would make the augment child of the grouping (which it is not)
 			a.Augments = append(a.Augments, e)
 			nodeToAugment := e.Find(a.Name)
 			if nodeToAugment == nil {
 				return newError(s, "target node to augment %s not found in path: %s", a.Name, e.Path())
 			} else {
-				nodeToAugment.merge(nil, a.Namespace(), a)
+				// using a namespace doesn't work well in this context,
+				// as the augmenting node should also inherit the instantiation namespace
+				// together with all the other entries in the group.
+				// nodeToAugment.merge(nil, a.Namespace(), a)
+				nodeToAugment.merge(nil, nil, a)
 			}
 		}
 
@@ -1062,6 +1072,10 @@ func ToEntry(n Node) (e *Entry) {
 				// The key of the map used is a synthesised value which is formed by
 				// concatenating the name of this node and the included submodule,
 				// separated by a ":".
+				if a.Module == nil {
+					e.addError(fmt.Errorf("%s: include has no module, did you try to load a submodule without a corresponding module?", n.NName()))
+					continue
+				}
 				srcToIncluded := a.Module.Name + ":" + n.NName()
 				includedToSrc := n.NName() + ":" + a.Module.Name
 
@@ -1726,10 +1740,10 @@ func (e *Entry) FindOrError(name string) (*Entry, error) {
 			prefix, partName := getPrefix(part)
 			prefixedName := partName
 			if prefix != "" && prefix != currentPrefix {
-				module := FindModuleByPrefix(contextNode, prefix)
-				if module != nil && module.Name != lastModule.Name {
-					prefixedName = module.Name + ":" + partName
-					lastModule = module
+				mod := FindModuleByPrefix(contextNode, prefix)
+				if mod != nil && mod.Name != lastModule.Name {
+					prefixedName = mod.Name + ":" + partName
+					lastModule = mod
 				}
 				currentPrefix = prefix
 			}

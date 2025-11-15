@@ -4287,11 +4287,17 @@ func TestLeafEntry(t *testing.T) {
 
 func TestAugmentUses(t *testing.T) {
 
+	type pathTest struct {
+		module    string
+		path      []string
+		namespace string
+	}
+
 	tests := []struct {
 		name       string
 		inModules  map[string]string
 		WantErrors []string
-		pathExist  [][]string
+		paths      []pathTest
 	}{
 		{
 			name:       "Yang 1.0 fail multiple augment in use",
@@ -4392,11 +4398,15 @@ func TestAugmentUses(t *testing.T) {
 		},
 		{
 			name: "Yang 1.1 pass multiple augment in use",
-			pathExist: [][]string{
-				{"container-a", "a"},
-				{"container-a", "b"},
-				{"container-a", "augment-a", "range", "start"},
-				{"container-a", "augment-a", "z", "enableZ"},
+			paths: []pathTest{
+				{module: "mod-a", path: []string{"container-a", "a"}, namespace: "urn:mod-a"},
+				{module: "mod-a", path: []string{"container-a", "b"}, namespace: "urn:mod-a"},
+				{module: "mod-a", path: []string{"container-a", "augment-a", "range", "start"}, namespace: "urn:mod-a"},
+				{module: "mod-a", path: []string{"container-a", "augment-a", "z", "enableZ"}, namespace: "urn:mod-a"},
+				{module: "mod-a", path: []string{"container-a", "mod-d:augment-a"}, namespace: "urn:mod-d"},
+				{module: "mod-a", path: []string{"container-a", "mod-d:augment-a", "z", "enableZ"}, namespace: "urn:mod-d"},
+				{module: "mod-a", path: []string{"container-a", "mod-d:augment-d", "z", "enableZ"}, namespace: "urn:mod-d"},
+				{module: "mod-d", path: []string{"container-d", "z", "from-d"}, namespace: "urn:mod-d"},
 			},
 			inModules: map[string]string{
 				"a.yang": `
@@ -4490,6 +4500,42 @@ func TestAugmentUses(t *testing.T) {
 				}
 				}
 				`,
+				"d.yang": `
+				module mod-d {
+					namespace "urn:mod-d";
+					prefix "modd";
+					yang-version 1.1;
+					import mod-a { prefix moda; }
+	
+					container container-d {
+						uses moda:grouping-a{
+							augment "z" {
+								leaf from-d {	
+									type string;
+								}
+							}
+						}
+					}
+					augment "/moda:container-a" {
+						container augment-a {
+						uses moda:grouping-a {
+							augment "z" {
+								leaf enableZ {	type string; }
+							}
+						}
+						}	
+					}
+					augment "/moda:container-a" {
+						container augment-d {
+						uses moda:grouping-a {
+							augment "z" {
+								leaf enableZ {	type string; }
+							}
+						}
+						}	
+					}
+				}
+				`,
 			},
 		},
 	}
@@ -4497,6 +4543,7 @@ func TestAugmentUses(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ms := NewModules()
+			ms.ParseOptions.PrefixMergedKeyNames = true
 			var errs []error
 
 			for n, m := range tt.inModules {
@@ -4523,21 +4570,22 @@ func TestAugmentUses(t *testing.T) {
 			}
 			if !wantErrors {
 				var curElem *Entry
-				curElem, errs = ms.GetModule("mod-a")
-				if len(errs) > 0 {
-					t.Fatalf("GetModule returned errors: %v", errs)
-				}
-
-				x := curElem
-				for _, p := range tt.pathExist {
-					for _, pe := range p {
+				for _, pTest := range tt.paths {
+					curElem, errs = ms.GetModule(pTest.module)
+					if len(errs) > 0 {
+						t.Fatalf("GetModule returned errors: %v", errs)
+					}
+					x := curElem
+					for _, pe := range pTest.path {
 						y, ok := x.Dir[pe]
 						if !ok {
-							t.Fatalf("expected module %s to contain path %s, could not find element %s in parent, got children: %v", curElem.Name, strings.Join(p, "/"), pe, x.Dir)
+							t.Fatalf("expected module %s to contain path %s, could not find element %s in parent, got children: %v", curElem.Name, strings.Join(pTest.path, "/"), pe, x.Dir)
 						}
 						x = y
 					}
-					x = curElem
+					if x.Namespace().Name != pTest.namespace {
+						t.Fatalf("expected entry %s to have namespace %s, got %s", x.Name, pTest.namespace, x.Namespace().Name)
+					}
 				}
 			}
 		})
