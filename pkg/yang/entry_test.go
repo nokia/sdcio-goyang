@@ -2889,40 +2889,44 @@ func TestEntryFind(t *testing.T) {
 	}}
 
 	for _, tt := range tests {
-		ms := NewModules()
-		ms.ParseOptions.PrefixMergedKeyNames = true
-		var errs []error
-		for n, m := range tt.inModules {
-			if err := ms.Parse(m, n); err != nil {
-				errs = append(errs, err)
+		testfunc := func(usePrefix bool) {
+			ms := NewModules()
+			ms.ParseOptions.PrefixMergedKeyNames = usePrefix
+			var errs []error
+			for n, m := range tt.inModules {
+				if err := ms.Parse(m, n); err != nil {
+					errs = append(errs, err)
+				}
+			}
+
+			if len(errs) > 0 {
+				t.Errorf("%s: ms.Parse(), got unexpected error parsing input modules: %v", tt.name, errs)
+				return
+			}
+
+			if errs := ms.Process(); len(errs) > 0 {
+				t.Errorf("%s: ms.Process(), got unexpected error processing entries: %v", tt.name, errs)
+				return
+			}
+
+			dir := map[string]*Entry{}
+			for _, m := range ms.Modules {
+				addTreeE(ToEntry(m), dir)
+			}
+
+			if _, ok := dir[tt.inBaseEntryPath]; !ok {
+				t.Errorf("%s: could not find entry %s within the dir: %v", tt.name, tt.inBaseEntryPath, dir)
+			}
+
+			for path, want := range tt.wantEntryPath {
+				got := dir[tt.inBaseEntryPath].Find(path)
+				if got.Path() != want {
+					t.Errorf("%s: (entry %s).Find(%s), did not find path, got: %v, want: %v, errors: %v", tt.name, dir[tt.inBaseEntryPath].Path(), path, got.Path(), want, dir[tt.inBaseEntryPath].Errors)
+				}
 			}
 		}
-
-		if len(errs) > 0 {
-			t.Errorf("%s: ms.Parse(), got unexpected error parsing input modules: %v", tt.name, errs)
-			continue
-		}
-
-		if errs := ms.Process(); len(errs) > 0 {
-			t.Errorf("%s: ms.Process(), got unexpected error processing entries: %v", tt.name, errs)
-			continue
-		}
-
-		dir := map[string]*Entry{}
-		for _, m := range ms.Modules {
-			addTreeE(ToEntry(m), dir)
-		}
-
-		if _, ok := dir[tt.inBaseEntryPath]; !ok {
-			t.Errorf("%s: could not find entry %s within the dir: %v", tt.name, tt.inBaseEntryPath, dir)
-		}
-
-		for path, want := range tt.wantEntryPath {
-			got := dir[tt.inBaseEntryPath].Find(path)
-			if got.Path() != want {
-				t.Errorf("%s: (entry %s).Find(%s), did not find path, got: %v, want: %v, errors: %v", tt.name, dir[tt.inBaseEntryPath].Path(), path, got.Path(), want, dir[tt.inBaseEntryPath].Errors)
-			}
-		}
+		testfunc(true)
+		testfunc(false)
 	}
 }
 

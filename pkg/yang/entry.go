@@ -1681,10 +1681,18 @@ func (e *Entry) FindOrError(name string) (*Entry, error) {
 	contextNode := RootNode(e.Node)
 	lastModule := contextNode
 	curr := e
+	usePrefix := false
+	modules := e.OptModules()
+	if modules != nil {
+		usePrefix = modules.ParseOptions.PrefixMergedKeyNames
+	}
 
 	// If parts[0] is "" then this path started with a /
 	// and we need to find our parent.
 	if parts[0] == "" {
+		if contextNode == nil {
+			return nil, fmt.Errorf("cannot resolve absolute path %q within context entry %q", name, e.Path())
+		}
 		parts = parts[1:]
 		for curr.Parent != nil {
 			curr = curr.Parent
@@ -1739,7 +1747,7 @@ func (e *Entry) FindOrError(name string) (*Entry, error) {
 		default:
 			prefix, partName := getPrefix(part)
 			prefixedName := partName
-			if prefix != "" && prefix != currentPrefix {
+			if usePrefix && prefix != "" && prefix != currentPrefix {
 				mod := FindModuleByPrefix(contextNode, prefix)
 				if mod != nil && mod.Name != lastModule.Name {
 					prefixedName = mod.Name + ":" + partName
